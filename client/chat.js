@@ -75,7 +75,7 @@ async function getFastestPeerFromMongo() {
         } catch { }
     }
 
-    return fastest || LOCAL_NODE;
+    return fastest;
 }
 
 
