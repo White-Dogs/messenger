@@ -277,7 +277,25 @@ async function main() {
         type: 'pkcs8',
         passphrase: privKeyPassword
     });
-    const recipientPubKey = fs.readFileSync(`${keyDir}/${recipientName}.pub.pem`, 'utf8');
+    //const recipientPubKey = fs.readFileSync(`${keyDir}/${recipientName}.pub.pem`, 'utf8');
+    let recipientPubKey;
+    const localPath = path.join(keyDir, `${recipientName}.pub.pem`);
+    if (fs.existsSync(localPath)) {
+        recipientPubKey = fs.readFileSync(localPath, 'utf8');
+    } else {
+        // Pretpostavljamo da je recipientName zapravo publicHash
+        const keyPath = path.join(keyDir, `${recipientName}.pub.pem`);
+        if (fs.existsSync(keyPath)) {
+            recipientPubKey = fs.readFileSync(keyPath, 'utf8');
+        } else {
+            // Probaj da povučeš sa mreže
+            recipientPubKey = await fetchAndCachePublicKey(recipientName);
+            if (!recipientPubKey) {
+                console.error('❌ Public key for recipient not found locally or remotely.');
+                process.exit(1);
+            }
+        }
+    }
     const myId = getPublicKeyHash(pubKeyPem);
     const recipientId = getPublicKeyHash(recipientPubKey);
     console.log(`🔓 You: ${myName} (${myId.slice(0, 12)}...)`);
