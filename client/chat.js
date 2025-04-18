@@ -46,7 +46,7 @@ function ask(question) {
     });
 }
 
-const MONGO_API = process.env.MONGO_API || 'http://localhost:4000';
+const MONGO_API = process.env.MONGO_API || 'http://3.123.20.100/:4000';
 
 async function getPeerListFromMongo() {
     try {
