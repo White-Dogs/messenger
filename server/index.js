@@ -11,7 +11,7 @@ const Blockchain = require('../blockchain/Blockchain');
 const app = express();
 const PORT = process.env.PORT || 3000;
 const CHAIN_FILE = `./chain-${PORT}.json`;
-const MONGO_API = process.env.MONGO_API || 'http://localhost:4000';
+const MONGO_API = process.env.MONGO_API || 'http://3.123.20.100:4000';
 
 let chain = Blockchain.loadFromFile(CHAIN_FILE);
 
