@@ -1,4 +1,4 @@
-// chat.js (final fixed command loop)
+// chat.js - Secure CLI Chat with Mongo Peer Discovery and Local Node Sending
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
@@ -9,23 +9,10 @@ const { decryptRSA, encryptRSA } = require('../encryption/rsa');
 const { decryptAES, encryptAES, generateAESKey, generateIV } = require('../encryption/aes');
 const { getPublicKeyHash } = require('../encryption/identity');
 
-//const LOCAL_NODE = process.env.NODE || 'localhost:3000';
-let CURRENT_PEER = null;
-
-async function resolveCurrentPeer() {
-    CURRENT_PEER = await getFastestPeerFromMongo();
-    if (!CURRENT_PEER) {
-        console.error('❌ No peer available.');
-        process.exit(1);
-    }
-    console.log(`🔌 Connected to peer: ${CURRENT_PEER}`);
-}
-
-function getSendUrl() {
-    return `http://${CURRENT_PEER}/send`;
-}
-
-
+const LOCAL_NODE = process.env.NODE || 'localhost:3000';
+const CHAIN_URL = `http://${LOCAL_NODE}/chain`;
+const SEND_URL = `http://${LOCAL_NODE}/send`;
+const PEER_LIST_URL = `http://${LOCAL_NODE}/peers`;
 const AUTO_REFRESH_INTERVAL = 1000;
 
 let rl;
@@ -78,7 +65,6 @@ async function getFastestPeerFromMongo() {
     return fastest;
 }
 
-
 async function registerUser(username) {
     const password = await ask('🔐 Set a password for your private key: ');
     const { publicKey, privateKey } = generateKeyPairSync('rsa', {
@@ -117,7 +103,7 @@ function signMessage(messageBody, privateKeyObj) {
 }
 
 async function fetchAndCachePublicKey(senderHash) {
-    for (const peer of await getPeerList()) {
+    for (const peer of await getPeerListFromMongo()) {
         try {
             const url = `http://${peer}/pubkey/${senderHash}`;
             const response = await axios.get(url);
@@ -129,10 +115,6 @@ async function fetchAndCachePublicKey(senderHash) {
         } catch { }
     }
     return null;
-}
-
-async function getPeerList() {
-    return await getPeerListFromMongo();
 }
 
 function verifySignature(tx, publicKeyPem) {
@@ -154,20 +136,9 @@ function verifySignature(tx, publicKeyPem) {
 let messageCache = new Set();
 let lastSeenIndex = 0;
 
-async function getRandomPeer() {
-    try {
-        const peer = await getFastestPeerFromMongo();
-        return `http://${peer}/chain`;
-    } catch (err) {
-        console.log('⚠️ Could not find fastest peer:', err.message);
-    }
-    return CHAIN_URL;
-}
-
 async function refreshInbox(myId, myPrivKey) {
     try {
-        const peerURL = await getRandomPeer();
-        const res = await axios.get(peerURL);
+        const res = await axios.get(CHAIN_URL);
         const chain = res.data;
         for (let i = lastSeenIndex + 1; i < chain.length; i++) {
             const block = chain[i];
@@ -220,7 +191,7 @@ async function sendMessage(myId, myPrivKey, recipientId, recipientPubKey) {
     };
     tx.signature = signMessage(tx, myPrivKey);
     try {
-        const sendRes = await axios.post(getSendUrl(), tx);
+        const sendRes = await axios.post(SEND_URL, tx);
         console.log(`✅ Message sent in block #${sendRes.data.blockIndex}`);
     } catch (err) {
         console.log(`❌ Message failed:`, err.response?.data || err.message);
@@ -228,12 +199,9 @@ async function sendMessage(myId, myPrivKey, recipientId, recipientPubKey) {
 }
 
 async function commandLoop(myId, myPrivKey, recipientId, recipientPubKey) {
-    console.log(`
-📨 Commands: /send /refresh /exit`);
-
+    console.log(`\n📨 Commands: /send /refresh /exit`);
     setInterval(() => refreshInbox(myId, myPrivKey), AUTO_REFRESH_INTERVAL);
     rl.prompt();
-
     rl.on('line', async (line) => {
         const input = line.trim();
         switch (input) {
@@ -263,8 +231,6 @@ async function main() {
         await registerUser(args[1]);
         process.exit(0);
     }
-    await resolveCurrentPeer();
-
     const myName = args[0] || await ask('Your name: ');
     const recipientName = args[1] || await ask('Recipient name: ');
     const keyDir = path.join(__dirname, '../keys');
@@ -277,18 +243,15 @@ async function main() {
         type: 'pkcs8',
         passphrase: privKeyPassword
     });
-    //const recipientPubKey = fs.readFileSync(`${keyDir}/${recipientName}.pub.pem`, 'utf8');
     let recipientPubKey;
     const localPath = path.join(keyDir, `${recipientName}.pub.pem`);
     if (fs.existsSync(localPath)) {
         recipientPubKey = fs.readFileSync(localPath, 'utf8');
     } else {
-        // Pretpostavljamo da je recipientName zapravo publicHash
         const keyPath = path.join(keyDir, `${recipientName}.pub.pem`);
         if (fs.existsSync(keyPath)) {
             recipientPubKey = fs.readFileSync(keyPath, 'utf8');
         } else {
-            // Probaj da povučeš sa mreže
             recipientPubKey = await fetchAndCachePublicKey(recipientName);
             if (!recipientPubKey) {
                 console.error('❌ Public key for recipient not found locally or remotely.');
