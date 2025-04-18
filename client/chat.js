@@ -46,7 +46,7 @@ function ask(question) {
     });
 }
 
-const MONGO_API = process.env.MONGO_API || 'http://3.123.20.100/:4000';
+const MONGO_API = process.env.MONGO_API || 'http://3.123.20.100:4000';
 
 async function getPeerListFromMongo() {
     try {
@@ -80,7 +80,7 @@ async function getFastestPeerFromMongo() {
 
 
 async function registerUser(username) {
-    const password = await askPassword('🔐 Set a password for your private key: ');
+    const password = await ask('🔐 Set a password for your private key: ');
     const { publicKey, privateKey } = generateKeyPairSync('rsa', {
         modulusLength: 2048,
         publicKeyEncoding: { type: 'pkcs1', format: 'pem' },
@@ -257,14 +257,14 @@ async function commandLoop(myId, myPrivKey, recipientId, recipientPubKey) {
 }
 
 async function main() {
-    await resolveCurrentPeer();
-
     setupReadline();
     const args = process.argv.slice(2);
     if (args[0] === '/register' && args[1]) {
         await registerUser(args[1]);
         process.exit(0);
     }
+    await resolveCurrentPeer();
+
     const myName = args[0] || await ask('Your name: ');
     const recipientName = args[1] || await ask('Recipient name: ');
     const keyDir = path.join(__dirname, '../keys');
