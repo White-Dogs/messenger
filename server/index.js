@@ -30,31 +30,39 @@ function getLocalIp() {
 async function setupUPnPAndRegister() {
     try {
         const upnp = require('nat-upnp');
-        const client = upnp.createClient();
+        const client = upnp.
 
-        client.portMapping({
-            public: PORT,
-            private: PORT,
-            ttl: 3600,
-            description: 'Blockchain Node UPnP'
-        }, async (err) => {
-            if (!err) {
-                client.getExternalIPAddress(async (err, ip) => {
-                    if (!err && ip) {
-                        publicUrl = `http://${ip}:${PORT}`;
-                        console.log(`🌍 UPnP Public URL: ${publicUrl}`);
-                    } else {
+            client.portMapping({
+                public: PORT,
+                private: PORT,
+                ttl: 3600,
+                description: 'Blockchain Node UPnP'
+            }, async (err) => {
+                if (!err) {
+                    try {
+                        client.getExternalIPAddress(async (err, ip) => {
+                            if (!err && ip) {
+                                publicUrl = `http://${ip}:${PORT}`;
+                                console.log(`🌍 UPnP Public URL: ${publicUrl}`);
+                            } else {
+                                console.log('⚠️ Failed to retrieve external IP from UPnP. Falling back.');
+                                publicUrl = `http://${getLocalIp()}:${PORT}`;
+                            }
+                            await startRegistration();
+                        });
+                    } catch (error) {
                         console.log('⚠️ Failed to retrieve external IP from UPnP. Falling back.');
                         publicUrl = `http://${getLocalIp()}:${PORT}`;
+                        await startRegistration();
+
                     }
+
+                } else {
+                    console.log('⚠️ UPnP port mapping failed. Falling back to local IP.');
+                    publicUrl = `http://${getLocalIp()}:${PORT}`;
                     await startRegistration();
-                });
-            } else {
-                console.log('⚠️ UPnP port mapping failed. Falling back to local IP.');
-                publicUrl = `http://${getLocalIp()}:${PORT}`;
-                await startRegistration();
-            }
-        });
+                }
+            });
     } catch (e) {
         console.log('⚠️ UPnP module not available. Falling back to local IP.');
         publicUrl = `http://${getLocalIp()}:${PORT}`;
