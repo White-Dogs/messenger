@@ -10,9 +10,9 @@ const { decryptAES, encryptAES, generateAESKey, generateIV } = require('../encry
 const { getPublicKeyHash } = require('../encryption/identity');
 
 const LOCAL_NODE = process.env.NODE || 'localhost:3000';
-const CHAIN_URL = `http://${LOCAL_NODE}:3000/chain`;
-const SEND_URL = `http://${LOCAL_NODE}:3000/send`;
-const PEER_LIST_URL = `http://${LOCAL_NODE}:3000/peers`;
+const CHAIN_URL = `http://${LOCAL_NODE}/chain`;
+const SEND_URL = `http://${LOCAL_NODE}/send`;
+const PEER_LIST_URL = `http://${LOCAL_NODE}/peers`;
 const AUTO_REFRESH_INTERVAL = 1000;
 
 let rl;
