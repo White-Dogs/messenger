@@ -16,7 +16,6 @@
   },
   "dependencies": {
     "cors": "^2.8.5",
-    "localtunnel": "^2.0.2",
     "mongoose": "^8.13.2",
     "readline-sync": "^1.4.10"
   }

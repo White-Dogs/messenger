@@ -5,13 +5,15 @@ const fs = require('fs');
 const crypto = require('crypto');
 const path = require('path');
 const axios = require('axios');
-const localtunnel = require('localtunnel');
+const os = require('os');
 const Blockchain = require('../blockchain/Blockchain');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 const CHAIN_FILE = `./chain-${PORT}.json`;
 const MONGO_API = process.env.MONGO_API || 'http://3.123.20.100:4000';
+const PUBLIC_HOST = process.env.PUBLIC_HOST || getPublicIp(); // npr. 1.2.3.4 ili domain.com
+
 
 let chain = Blockchain.loadFromFile(CHAIN_FILE);
 
@@ -124,19 +126,27 @@ app.get('/pubkey/:id', (req, res) => {
     }
 });
 
-let publicUrl = null;
+let publicUrl = `http://${PUBLIC_HOST}:${PORT}`;
 
-async function startTunnelAndRegister() {
-    const tunnel = await localtunnel({ port: PORT });
-    publicUrl = tunnel.url;
-    console.log(`🌐 Public URL: ${publicUrl}`);
+function getPublicIp() {
+    const interfaces = os.networkInterfaces();
+    for (const name of Object.keys(interfaces)) {
+        for (const iface of interfaces[name]) {
+            if (iface.family === 'IPv4' && !iface.internal) {
+                return iface.address;
+            }
+        }
+    }
+    return '127.0.0.1'; // fallback
+}
+
+async function startRegistration() {
+    console.log(`🌐 Node public URL: ${publicUrl}`);
     await sendHeartbeat();
     setInterval(sendHeartbeat, 30_000);
 }
 
 async function sendHeartbeat() {
-    if (!publicUrl) return;
-
     try {
         await axios.post(`${MONGO_API}/heartbeat`, {
             url: publicUrl,
@@ -144,13 +154,13 @@ async function sendHeartbeat() {
         });
         console.log(`📡 Sent heartbeat: ${publicUrl}`);
     } catch (err) {
-        console.log('❌ Failed to send heartbeat', err.message);
+        console.log('❌ Failed to send heartbeat:', err.message);
     }
 }
 
 app.listen(PORT, async () => {
     console.log(`🚀 Node running at http://localhost:${PORT}`);
-    await startTunnelAndRegister();
+    await startRegistration();
     try {
         await axios.get(`http://localhost:${PORT}/sync`);
         console.log('🔄 Initial sync complete');
