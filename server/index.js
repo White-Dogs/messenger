@@ -73,10 +73,10 @@ app.get('/sync', async (req, res) => {
     let replaced = false;
     try {
         const response = await axios.get(`${MONGO_API}/nodes`);
-        const peers = response.data.map(n => n.url.replace(/^https?:\/\//, '').replace(/\/$/, ''));
+        const peers = response.data.map(n => n.url.replace(/^http?:\/\//, '').replace(/\/$/, ''));
         for (const peer of peers) {
             try {
-                const syncUrl = `https://${peer}/chain`;
+                const syncUrl = `http://${peer}/chain`;
                 const res = await axios.get(syncUrl);
                 const theirChain = res.data;
                 if (theirChain.length > chain.chain.length) {
