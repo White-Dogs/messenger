@@ -1,4 +1,4 @@
-// index.js - Secure Blockchain Node with Mongo Sync
+// index.js - Secure Blockchain Node with Mongo Sync and UPnP
 const express = require('express');
 const bodyParser = require('body-parser');
 const fs = require('fs');
@@ -12,11 +12,75 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 const CHAIN_FILE = `./chain-${PORT}.json`;
 const MONGO_API = process.env.MONGO_API || 'http://3.123.20.100:4000';
-const PUBLIC_HOST = process.env.PUBLIC_HOST || getPublicIp(); // npr. 1.2.3.4 ili domain.com
 
+let publicUrl = null;
+
+function getLocalIp() {
+    const interfaces = os.networkInterfaces();
+    for (const name of Object.keys(interfaces)) {
+        for (const iface of interfaces[name]) {
+            if (iface.family === 'IPv4' && !iface.internal) {
+                return iface.address;
+            }
+        }
+    }
+    return '127.0.0.1';
+}
+
+async function setupUPnPAndRegister() {
+    try {
+        const upnp = require('nat-upnp');
+        const client = upnp.createClient();
+
+        client.portMapping({
+            public: PORT,
+            private: PORT,
+            ttl: 3600,
+            description: 'Blockchain Node UPnP'
+        }, async (err) => {
+            if (!err) {
+                client.getExternalIPAddress(async (err, ip) => {
+                    if (!err && ip) {
+                        publicUrl = `http://${ip}:${PORT}`;
+                        console.log(`🌍 UPnP Public URL: ${publicUrl}`);
+                    } else {
+                        console.log('⚠️ Failed to retrieve external IP from UPnP. Falling back.');
+                        publicUrl = `http://${getLocalIp()}:${PORT}`;
+                    }
+                    await startRegistration();
+                });
+            } else {
+                console.log('⚠️ UPnP port mapping failed. Falling back to local IP.');
+                publicUrl = `http://${getLocalIp()}:${PORT}`;
+                await startRegistration();
+            }
+        });
+    } catch (e) {
+        console.log('⚠️ UPnP module not available. Falling back to local IP.');
+        publicUrl = `http://${getLocalIp()}:${PORT}`;
+        await startRegistration();
+    }
+}
+
+async function startRegistration() {
+    console.log(`🌐 Node public URL: ${publicUrl}`);
+    await sendHeartbeat();
+    setInterval(sendHeartbeat, 30_000);
+}
+
+async function sendHeartbeat() {
+    try {
+        await axios.post(`${MONGO_API}/heartbeat`, {
+            url: publicUrl,
+            port: PORT
+        });
+        console.log(`📡 Sent heartbeat: ${publicUrl}`);
+    } catch (err) {
+        console.log('❌ Failed to send heartbeat:', err.message);
+    }
+}
 
 let chain = Blockchain.loadFromFile(CHAIN_FILE);
-
 app.use(bodyParser.json());
 
 function verifySignature(tx, publicKeyPem) {
@@ -126,41 +190,9 @@ app.get('/pubkey/:id', (req, res) => {
     }
 });
 
-let publicUrl = `http://${PUBLIC_HOST}:${PORT}`;
-
-function getPublicIp() {
-    const interfaces = os.networkInterfaces();
-    for (const name of Object.keys(interfaces)) {
-        for (const iface of interfaces[name]) {
-            if (iface.family === 'IPv4' && !iface.internal) {
-                return iface.address;
-            }
-        }
-    }
-    return '127.0.0.1'; // fallback
-}
-
-async function startRegistration() {
-    console.log(`🌐 Node public URL: ${publicUrl}`);
-    await sendHeartbeat();
-    setInterval(sendHeartbeat, 30_000);
-}
-
-async function sendHeartbeat() {
-    try {
-        await axios.post(`${MONGO_API}/heartbeat`, {
-            url: publicUrl,
-            port: PORT
-        });
-        console.log(`📡 Sent heartbeat: ${publicUrl}`);
-    } catch (err) {
-        console.log('❌ Failed to send heartbeat:', err.message);
-    }
-}
-
 app.listen(PORT, async () => {
     console.log(`🚀 Node running at http://localhost:${PORT}`);
-    await startRegistration();
+    await setupUPnPAndRegister();
     try {
         await axios.get(`http://localhost:${PORT}/sync`);
         console.log('🔄 Initial sync complete');

@@ -1,4 +1,4 @@
-// chat.js - Secure CLI Chat with Mongo Peer Discovery and Local Node Sending
+// chat.js - Secure CLI Chat with Mongo Peer Discovery (no local node required)
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
@@ -9,11 +9,8 @@ const { decryptRSA, encryptRSA } = require('../encryption/rsa');
 const { decryptAES, encryptAES, generateAESKey, generateIV } = require('../encryption/aes');
 const { getPublicKeyHash } = require('../encryption/identity');
 
-const LOCAL_NODE = process.env.NODE || 'localhost:3000';
-const CHAIN_URL = `http://${LOCAL_NODE}/chain`;
-const SEND_URL = `http://${LOCAL_NODE}/send`;
-const PEER_LIST_URL = `http://${LOCAL_NODE}/peers`;
 const AUTO_REFRESH_INTERVAL = 1000;
+const MONGO_API = process.env.MONGO_API || 'http://3.123.20.100:4000';
 
 let rl;
 
@@ -26,14 +23,8 @@ function setupReadline() {
 }
 
 function ask(question) {
-    return new Promise(resolve => {
-        rl.question(question, answer => {
-            resolve(answer);
-        });
-    });
+    return new Promise(resolve => rl.question(question, resolve));
 }
-
-const MONGO_API = process.env.MONGO_API || 'http://3.123.20.100:4000';
 
 async function getPeerListFromMongo() {
     try {
@@ -45,7 +36,7 @@ async function getPeerListFromMongo() {
     }
 }
 
-async function getFastestPeerFromMongo() {
+async function getFastestPeer() {
     const peers = await getPeerListFromMongo();
     let fastest = null;
     let shortest = Infinity;
@@ -65,6 +56,34 @@ async function getFastestPeerFromMongo() {
     return fastest;
 }
 
+async function getChainURL() {
+    const peer = await getFastestPeer();
+    if (!peer) throw new Error("No available peer");
+    return `http://${peer}/chain`;
+}
+
+async function getSendURL() {
+    const peer = await getFastestPeer();
+    if (!peer) throw new Error("No available peer");
+    return `http://${peer}/send`;
+}
+
+async function fetchAndCachePublicKey(publicHash) {
+    const peers = await getPeerListFromMongo();
+    for (const peer of peers) {
+        try {
+            const url = `http://${peer}/pubkey/${publicHash}`;
+            const response = await axios.get(url);
+            const pubKey = response.data?.pubKey;
+            if (pubKey) {
+                fs.writeFileSync(`./keys/${publicHash}.pub.pem`, pubKey);
+                return pubKey;
+            }
+        } catch { }
+    }
+    return null;
+}
+
 async function registerUser(username) {
     const password = await ask('🔐 Set a password for your private key: ');
     const { publicKey, privateKey } = generateKeyPairSync('rsa', {
@@ -77,20 +96,26 @@ async function registerUser(username) {
             passphrase: password
         }
     });
+
     const keysDir = path.join(__dirname, '../keys');
     const metaDir = path.join(__dirname, '../metadata');
     if (!fs.existsSync(keysDir)) fs.mkdirSync(keysDir);
     if (!fs.existsSync(metaDir)) fs.mkdirSync(metaDir);
+
     fs.writeFileSync(`${keysDir}/${username}.priv.pem`, privateKey);
     fs.writeFileSync(`${keysDir}/${username}.pub.pem`, publicKey);
+
     const pubHash = getPublicKeyHash(publicKey);
     fs.writeFileSync(`${keysDir}/${pubHash}.pub.pem`, publicKey);
+
     const meta = {
         name: username,
         publicHash: pubHash,
         createdAt: new Date().toISOString()
     };
+
     fs.writeFileSync(`${metaDir}/${username}.json`, JSON.stringify(meta, null, 2));
+
     console.log(`✅ Registered ${username}`);
     console.log(`🔑 Public hash: ${pubHash}`);
 }
@@ -100,21 +125,6 @@ function signMessage(messageBody, privateKeyObj) {
     signer.update(JSON.stringify(messageBody));
     signer.end();
     return signer.sign(privateKeyObj).toString('base64');
-}
-
-async function fetchAndCachePublicKey(senderHash) {
-    for (const peer of await getPeerListFromMongo()) {
-        try {
-            const url = `http://${peer}/pubkey/${senderHash}`;
-            const response = await axios.get(url);
-            const pubKey = response.data?.pubKey;
-            if (pubKey) {
-                fs.writeFileSync(`./keys/${senderHash}.pub.pem`, pubKey);
-                return pubKey;
-            }
-        } catch { }
-    }
-    return null;
 }
 
 function verifySignature(tx, publicKeyPem) {
@@ -138,8 +148,10 @@ let lastSeenIndex = 0;
 
 async function refreshInbox(myId, myPrivKey) {
     try {
-        const res = await axios.get(CHAIN_URL);
+        const chainUrl = await getChainURL();
+        const res = await axios.get(chainUrl);
         const chain = res.data;
+
         for (let i = lastSeenIndex + 1; i < chain.length; i++) {
             const block = chain[i];
             for (const tx of block.transactions) {
@@ -149,6 +161,7 @@ async function refreshInbox(myId, myPrivKey) {
                         const aesKey = decryptRSA(myPrivKey, Buffer.from(tx.encryptedKey, 'base64'));
                         const decrypted = decryptAES(tx.encryptedMessage, aesKey, Buffer.from(tx.iv, 'base64'));
                         tx.decrypted = decrypted;
+
                         let verified = false;
                         let senderKeyFile = null;
                         try {
@@ -156,9 +169,11 @@ async function refreshInbox(myId, myPrivKey) {
                         } catch {
                             senderKeyFile = await fetchAndCachePublicKey(tx.senderHash);
                         }
+
                         if (senderKeyFile) {
                             verified = verifySignature(tx, senderKeyFile);
                         }
+
                         console.log(`\n💬 [Block ${block.index}] From ${tx.senderHash.slice(0, 10)}...`);
                         console.log(`   → ${decrypted}`);
                         console.log(`   🔏 Signature: ${verified ? '✅ VERIFIED' : '❌ UNKNOWN'}\n`);
@@ -181,6 +196,7 @@ async function sendMessage(myId, myPrivKey, recipientId, recipientPubKey) {
     const iv = generateIV();
     const encryptedMessage = encryptAES(message, aesKey, iv);
     const encryptedAESKey = encryptRSA(recipientPubKey, aesKey);
+
     const tx = {
         senderHash: myId,
         recipientHash: recipientId,
@@ -189,9 +205,12 @@ async function sendMessage(myId, myPrivKey, recipientId, recipientPubKey) {
         encryptedKey: encryptedAESKey.toString('base64'),
         iv: iv.toString('base64')
     };
+
     tx.signature = signMessage(tx, myPrivKey);
+
     try {
-        const sendRes = await axios.post(SEND_URL, tx);
+        const sendUrl = await getSendURL();
+        const sendRes = await axios.post(sendUrl, tx);
         console.log(`✅ Message sent in block #${sendRes.data.blockIndex}`);
     } catch (err) {
         console.log(`❌ Message failed:`, err.response?.data || err.message);
@@ -221,7 +240,6 @@ async function commandLoop(myId, myPrivKey, recipientId, recipientPubKey) {
         }
         rl.prompt();
     });
-    rl.prompt();
 }
 
 async function main() {
@@ -231,11 +249,14 @@ async function main() {
         await registerUser(args[1]);
         process.exit(0);
     }
+
     const myName = args[0] || await ask('Your name: ');
     const recipientName = args[1] || await ask('Recipient name: ');
+
     const keyDir = path.join(__dirname, '../keys');
     const privKeyPem = fs.readFileSync(`${keyDir}/${myName}.priv.pem`, 'utf8');
     const pubKeyPem = fs.readFileSync(`${keyDir}/${myName}.pub.pem`, 'utf8');
+
     const privKeyPassword = await ask(`🔐 Password for ${myName}: `);
     const myPrivKey = crypto.createPrivateKey({
         key: privKeyPem,
@@ -243,26 +264,25 @@ async function main() {
         type: 'pkcs8',
         passphrase: privKeyPassword
     });
+
     let recipientPubKey;
     const localPath = path.join(keyDir, `${recipientName}.pub.pem`);
     if (fs.existsSync(localPath)) {
         recipientPubKey = fs.readFileSync(localPath, 'utf8');
     } else {
-        const keyPath = path.join(keyDir, `${recipientName}.pub.pem`);
-        if (fs.existsSync(keyPath)) {
-            recipientPubKey = fs.readFileSync(keyPath, 'utf8');
-        } else {
-            recipientPubKey = await fetchAndCachePublicKey(recipientName);
-            if (!recipientPubKey) {
-                console.error('❌ Public key for recipient not found locally or remotely.');
-                process.exit(1);
-            }
+        recipientPubKey = await fetchAndCachePublicKey(recipientName);
+        if (!recipientPubKey) {
+            console.error('❌ Public key for recipient not found locally or remotely.');
+            process.exit(1);
         }
     }
+
     const myId = getPublicKeyHash(pubKeyPem);
     const recipientId = getPublicKeyHash(recipientPubKey);
+
     console.log(`🔓 You: ${myName} (${myId.slice(0, 12)}...)`);
     console.log(`📬 Chatting with: ${recipientName} (${recipientId.slice(0, 12)}...)`);
+
     await refreshInbox(myId, myPrivKey);
     await commandLoop(myId, myPrivKey, recipientId, recipientPubKey);
 }
